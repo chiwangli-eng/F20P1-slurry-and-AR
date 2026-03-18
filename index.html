@@ -80,8 +80,9 @@
 
           // Adsorption Sludge State
           const [fAfterCryst, setFAfterCryst] = useState(100);
+          const [fAfterAdsorption, setFAfterAdsorption] = useState(5); // New parameter for F after adsorption
           const [alFRatioAdsorption, setAlFRatioAdsorption] = useState(2);
-          const [waterContent, setWaterContent] = useState(80); // New parameter for sludge water content
+          const [waterContent, setWaterContent] = useState(80);
 
           // Constants
           const Ka = Math.pow(10, -3.19);
@@ -173,28 +174,52 @@
 
           const sludgeResults = useMemo(() => {
             const currentFlow = results.flow;
+            
+            // F calculations
             const fMolesPerDay = (fAfterCryst / 19000) * currentFlow * 1000;
+            const fAdsorbedKgPerDay = Math.max(0, (fAfterCryst - fAfterAdsorption) * currentFlow / 1000);
+            
+            // Al(OH)3 calculations
             const alMolesPerDay = fMolesPerDay * alFRatioAdsorption;
             const alOh3GeneratedKgPerDay = alMolesPerDay * 0.07801;
+            
+            // Total Dry Sludge incorporates both the Al(OH)3 generated and the F adsorbed
+            const totalDrySludge = alOh3GeneratedKgPerDay + fAdsorbedKgPerDay;
+
+            // Al(OH)3 needed for Reagent A
             const alOh3Needed = treatmentResults.alOh3EquivalentKgPerDay;
             
             let canTotallyReuse = true;
-            let excess = 0;
+            let excessDry = 0;
             let wetExcess = 0;
-            let shortfall = 0;
+            let shortfallAlOh3 = 0;
 
             if (alOh3GeneratedKgPerDay > alOh3Needed) {
               canTotallyReuse = false;
-              excess = alOh3GeneratedKgPerDay - alOh3Needed;
+              
+              // Calculate how much Al(OH)3 is excess
+              const excessAlOh3 = alOh3GeneratedKgPerDay - alOh3Needed;
+              // What proportion of the total sludge is this excess?
+              const excessRatio = excessAlOh3 / alOh3GeneratedKgPerDay;
+              
+              // Excess dry sludge includes proportional adsorbed F
+              excessDry = excessAlOh3 + (fAdsorbedKgPerDay * excessRatio);
+              
               // Calculate wet mass based on water content (Wet = Dry / (1 - %Water))
-              wetExcess = excess / (1 - (waterContent / 100));
+              wetExcess = excessDry / (1 - (waterContent / 100));
             } else {
               canTotallyReuse = true;
-              shortfall = alOh3Needed - alOh3GeneratedKgPerDay;
+              shortfallAlOh3 = alOh3Needed - alOh3GeneratedKgPerDay;
             }
 
-            return { generated: alOh3GeneratedKgPerDay, excess, wetExcess, shortfall, canTotallyReuse };
-          }, [results.flow, fAfterCryst, alFRatioAdsorption, treatmentResults.alOh3EquivalentKgPerDay, waterContent]);
+            return { 
+              generatedDry: totalDrySludge, 
+              excessDry, 
+              wetExcess, 
+              shortfallAlOh3, 
+              canTotallyReuse 
+            };
+          }, [results.flow, fAfterCryst, fAfterAdsorption, alFRatioAdsorption, treatmentResults.alOh3EquivalentKgPerDay, waterContent]);
 
           return (
             <div className="p-4 md:p-8">
@@ -356,6 +381,7 @@
                     <div>
                       <p className="text-sm text-gray-500 mb-6">Set downstream adsorption parameters to calculate Al(OH)₃ sludge generation, required water content, and reusability.</p>
                       <SliderInput label="F after Crystallization" value={fAfterCryst} setter={setFAfterCryst} min={40} max={200} step={1} iconClass="fa-solid fa-filter" unit="mg/L" />
+                      <SliderInput label="F after Adsorption" value={fAfterAdsorption} setter={setFAfterAdsorption} min={0} max={20} step={1} iconClass="fa-solid fa-filter" unit="mg/L" />
                       <SliderInput label="Al/F Dosing Ratio" value={alFRatioAdsorption} setter={setAlFRatioAdsorption} min={1} max={4} step={0.1} iconClass="fa-solid fa-flask" unit="mol/mol" />
                       <SliderInput label="Sludge Water Content" value={waterContent} setter={setWaterContent} min={10} max={80} step={1} iconClass="fa-solid fa-droplet" unit="%" />
                     </div>
@@ -364,10 +390,10 @@
                       <div>
                         <p className="text-emerald-800 text-sm font-semibold mb-1">Generated Adsorption Sludge (Dry)</p>
                         <div className="flex items-baseline gap-2">
-                          <p className="text-4xl font-bold text-emerald-900 tracking-tight">{sludgeResults.generated.toLocaleString('en-US', { maximumFractionDigits: 1 })}</p>
+                          <p className="text-4xl font-bold text-emerald-900 tracking-tight">{sludgeResults.generatedDry.toLocaleString('en-US', { maximumFractionDigits: 1 })}</p>
                           <span className="text-emerald-700 font-medium">kg/day</span>
                         </div>
-                        <p className="text-xs text-emerald-600 mt-1">Total Dry Al(OH)₃ from downstream process</p>
+                        <p className="text-xs text-emerald-600 mt-1">Total Dry Mass (Al(OH)₃ + Adsorbed F)</p>
                       </div>
                       
                       <div className="h-px bg-emerald-200 w-full my-2"></div>
@@ -392,9 +418,10 @@
                           <div>
                             <p className="text-orange-800 text-sm font-semibold mb-1">Excess to Discharge (Dry)</p>
                             <div className="flex items-baseline gap-2">
-                              <p className="text-2xl font-bold text-orange-900 tracking-tight">{sludgeResults.excess.toLocaleString('en-US', { maximumFractionDigits: 1 })}</p>
+                              <p className="text-2xl font-bold text-orange-900 tracking-tight">{sludgeResults.excessDry.toLocaleString('en-US', { maximumFractionDigits: 1 })}</p>
                               <span className="text-orange-700 font-medium">kg/day</span>
                             </div>
+                            <p className="text-xs text-orange-600 mt-1">Includes proportional adsorbed F</p>
                           </div>
                           
                           <div className="bg-white/60 p-3 rounded-lg border border-orange-200">
@@ -410,7 +437,7 @@
                         <div>
                           <p className="text-blue-800 text-sm font-semibold mb-1">Additional Al(OH)₃ Needed (Dry)</p>
                           <div className="flex items-baseline gap-2">
-                            <p className="text-3xl font-bold text-blue-900 tracking-tight">{sludgeResults.shortfall.toLocaleString('en-US', { maximumFractionDigits: 1 })}</p>
+                            <p className="text-3xl font-bold text-blue-900 tracking-tight">{sludgeResults.shortfallAlOh3.toLocaleString('en-US', { maximumFractionDigits: 1 })}</p>
                             <span className="text-blue-700 font-medium">kg/day</span>
                           </div>
                           <p className="text-xs text-blue-600 mt-1">To fully meet Reagent A demand</p>
