@@ -4,7 +4,438 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Wastewater Mixing Calculator</title>
+    <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wastewater Mixing Calculator</title>
     
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    
+    <!-- Babel to compile JSX in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-50 text-gray-800 font-sans">
+    
+    <!-- This is where the React app will be injected -->
+    <div id="root"></div>
+
+    <!-- React Application Logic -->
+    <script type="text/babel">
+        const { useState, useMemo } = React;
+
+        const SliderInput = ({ label, value, setter, min, max, step, iconClass, unit }) => (
+          <div className="mb-3 bg-gray-50/50 p-3 rounded-lg border border-gray-100">
+            <div className="flex justify-between items-center mb-1">
+              <label className="text-xs font-semibold text-gray-700 flex items-center gap-1.5">
+                <i className={`${iconClass} text-blue-500 w-3 text-center`}></i>
+                {label}
+              </label>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  value={value}
+                  onChange={(e) => setter(Number(e.target.value))}
+                  className="w-20 px-1.5 py-0.5 text-right text-xs border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                  min={min}
+                  max={max}
+                  step={step}
+                />
+                <span className="text-[10px] text-gray-500 font-medium w-6">{unit}</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min={min}
+              max={max}
+              step={step}
+              value={value}
+              onChange={(e) => setter(Number(e.target.value))}
+              className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+            />
+            <div className="flex justify-between mt-0.5 px-0.5">
+              <span className="text-[10px] text-gray-400">{min}</span>
+              <span className="text-[10px] text-gray-400">{max}</span>
+            </div>
+          </div>
+        );
+
+        function App() {
+          const [mixStreams, setMixStreams] = useState(true);
+
+          // F20P1 Wastewater State
+          const [f20p1FMgL, setF20p1FMgL] = useState(1200);
+          const [f20p1Ph, setF20p1Ph] = useState(3.52);
+          const [f20p1Flow, setF20p1Flow] = useState(2000);
+
+          // HFC Stream State
+          const [hfcFWtPct, setHfcFWtPct] = useState(10);
+          const [hfcFlow, setHfcFlow] = useState(10);
+
+          // Reagent A State
+          const [targetPh, setTargetPh] = useState(8.3);
+
+          // Adsorption Sludge State
+          const [fAfterCryst, setFAfterCryst] = useState(100);
+          const [fAfterAdsorption, setFAfterAdsorption] = useState(5);
+          const [alFRatioAdsorption, setAlFRatioAdsorption] = useState(2);
+          const [waterContent, setWaterContent] = useState(80);
+
+          // Constants
+          const Ka = Math.pow(10, -3.19);
+          const MOLAR_MASS_F_MG = 19000;
+
+          const results = useMemo(() => {
+            if (!mixStreams) {
+              return { isMixed: false, fMgL: f20p1FMgL, ph: f20p1Ph, flow: f20p1Flow };
+            }
+
+            const f_f20p1_mol_L = f20p1FMgL / MOLAR_MASS_F_MG;
+            const f_hfc_mg_L = (hfcFWtPct / 100) * 1000 * 1000;
+            const f_hfc_mol_L = f_hfc_mg_L / MOLAR_MASS_F_MG;
+
+            const total_f_moles = (f_f20p1_mol_L * f20p1Flow) + (f_hfc_mol_L * hfcFlow);
+            const total_volume = f20p1Flow + hfcFlow;
+
+            const mixed_F_mol_L = total_f_moles / total_volume;
+            const mixed_F_mg_L = mixed_F_mol_L * MOLAR_MASS_F_MG;
+
+            const calcChargeDiff = (ph, f_mg_l) => {
+              const h_plus = Math.pow(10, -ph);
+              const oh_minus = Math.pow(10, -(14 - ph));
+              const totf_mol_l = f_mg_l / MOLAR_MASS_F_MG;
+              const f_minus = (Ka * totf_mol_l) / (h_plus + Ka);
+              return oh_minus + f_minus - h_plus;
+            };
+
+            const charge_diff_F20P1 = calcChargeDiff(f20p1Ph, f20p1FMgL);
+            const adjusted_charge_diff = charge_diff_F20P1 * (f20p1Flow / total_volume);
+
+            const objective = (ph_val) => {
+              const h_plus_val = Math.pow(10, -ph_val);
+              const oh_minus_val = Math.pow(10, -(14 - ph_val));
+              const f_minus_val = (Ka * mixed_F_mol_L) / (h_plus_val + Ka);
+              return h_plus_val + adjusted_charge_diff - oh_minus_val - f_minus_val;
+            };
+
+            let low = 0;
+            let high = 14;
+            let mixed_pH = 7;
+
+            for (let i = 0; i < 45; i++) {
+              mixed_pH = (low + high) / 2;
+              const val = objective(mixed_pH);
+              if (val > 0) { low = mixed_pH; } 
+              else { high = mixed_pH; }
+            }
+
+            return { isMixed: true, fMgL: mixed_F_mg_L, ph: mixed_pH, flow: total_volume };
+          }, [mixStreams, f20p1FMgL, f20p1Ph, f20p1Flow, hfcFWtPct, hfcFlow]);
+
+          const treatmentResults = useMemo(() => {
+            const currentPh = results.ph;
+            const currentFMgL = results.fMgL;
+            const currentFlow = results.flow;
+
+            if (currentFMgL === 0) return { aChemicalKgPerDay: 0, alFRatio: 0, alOh3EquivalentKgPerDay: 0 };
+
+            const Al_mol_per_kg_A = 2.51;
+            const TOTF_mol_L = currentFMgL / 19000;
+            const F_treated_kg_per_L = currentFMgL / 1000000;
+            const ten_neg_pH = Math.pow(10, -currentPh);
+            const ten_neg_pHtar = Math.pow(10, -targetPh);
+            const F_mol_L = (Ka / (Ka + ten_neg_pH)) * TOTF_mol_L;
+            const HF_mol_L = TOTF_mol_L - F_mol_L;
+
+            const Alkali_mol_L = (ten_neg_pH - ten_neg_pHtar) + 
+                                 (Math.pow(10, targetPh - 14) - Math.pow(10, currentPh - 14)) + 
+                                 HF_mol_L;
+
+            const Al_mol_L = Alkali_mol_L / 6;
+            const Al_F_for_A = (Al_mol_L / TOTF_mol_L) * 6;
+            const A_chemical_kg_per_kgF = (TOTF_mol_L / 6) * Al_F_for_A / Al_mol_per_kg_A / F_treated_kg_per_L;
+
+            const F_kg_per_day = (currentFMgL * currentFlow) / 1000;
+            const A_chemical_kg_per_day = A_chemical_kg_per_kgF * F_kg_per_day;
+
+            const total_Al_moles_per_day = A_chemical_kg_per_day * Al_mol_per_kg_A;
+            const MOLAR_MASS_AL_OH_3_KG = 0.07801;
+            const alOh3EquivalentKgPerDay = total_Al_moles_per_day * MOLAR_MASS_AL_OH_3_KG;
+
+            return {
+              aChemicalKgPerDay: Math.max(0, A_chemical_kg_per_day),
+              alFRatio: Math.max(0, Al_F_for_A),
+              alOh3EquivalentKgPerDay: Math.max(0, alOh3EquivalentKgPerDay)
+            };
+          }, [results, targetPh, Ka]);
+
+          const sludgeResults = useMemo(() => {
+            const currentFlow = results.flow;
+            
+            const fMolesPerDay = (fAfterCryst / 19000) * currentFlow * 1000;
+            const fAdsorbedKgPerDay = Math.max(0, (fAfterCryst - fAfterAdsorption) * currentFlow / 1000);
+            
+            const alMolesPerDay = fMolesPerDay * alFRatioAdsorption;
+            const alOh3GeneratedKgPerDay = alMolesPerDay * 0.07801;
+            
+            const totalDrySludge = alOh3GeneratedKgPerDay + fAdsorbedKgPerDay;
+            const alOh3Needed = treatmentResults.alOh3EquivalentKgPerDay;
+            
+            let canTotallyReuse = true;
+            let excessDry = 0;
+            let wetExcess = 0;
+            let shortfallAlOh3 = 0;
+
+            if (alOh3GeneratedKgPerDay > alOh3Needed) {
+              canTotallyReuse = false;
+              const excessAlOh3 = alOh3GeneratedKgPerDay - alOh3Needed;
+              const excessRatio = excessAlOh3 / alOh3GeneratedKgPerDay;
+              
+              excessDry = excessAlOh3 + (fAdsorbedKgPerDay * excessRatio);
+              wetExcess = excessDry / (1 - (waterContent / 100));
+            } else {
+              canTotallyReuse = true;
+              shortfallAlOh3 = alOh3Needed - alOh3GeneratedKgPerDay;
+            }
+
+            return { 
+              generatedDry: totalDrySludge, 
+              excessDry, 
+              wetExcess, 
+              shortfallAlOh3, 
+              canTotallyReuse 
+            };
+          }, [results.flow, fAfterCryst, fAfterAdsorption, alFRatioAdsorption, treatmentResults.alOh3EquivalentKgPerDay, waterContent]);
+
+          return (
+            <div className="p-3 md:p-6 min-h-screen flex justify-center">
+              <div className="w-full max-w-6xl space-y-4">
+                
+                {/* Header Compact */}
+                <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100 flex flex-col sm:flex-row justify-between items-center gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-blue-100 p-2 rounded-lg text-blue-600">
+                      <i className="fa-solid fa-water fa-lg"></i>
+                    </div>
+                    <div>
+                      <h1 className="text-xl font-bold text-gray-900 leading-tight">Wastewater Stream Mixer</h1>
+                      <p className="text-gray-500 text-xs">Calculate pH, F concentration, and sludge reusability.</p>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center gap-2 bg-gray-50 p-1.5 rounded-lg border border-gray-200">
+                    <span className={`text-xs font-semibold px-2 ${!mixStreams ? 'text-gray-800' : 'text-gray-400'}`}>Raw</span>
+                    <button 
+                      onClick={() => setMixStreams(!mixStreams)}
+                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${mixStreams ? 'bg-blue-600' : 'bg-gray-300'}`}
+                    >
+                      <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${mixStreams ? 'translate-x-5' : 'translate-x-1'}`}></span>
+                    </button>
+                    <span className={`text-xs font-semibold px-2 ${mixStreams ? 'text-blue-700' : 'text-gray-400'}`}>Mixed</span>
+                  </div>
+                </div>
+
+                {/* Main Content Dashboard Grid */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
+                  
+                  {/* LEFT: Inputs Panel (Spans 2 columns) */}
+                  <div className="lg:col-span-2 space-y-4">
+                    
+                    {/* Top Row Inputs */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+                      {/* F20P1 Settings */}
+                      <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
+                        <h2 className="text-sm font-bold text-gray-800 flex items-center gap-2 mb-3">
+                          <i className="fa-solid fa-flask text-teal-500"></i> F20P1 Wastewater
+                        </h2>
+                        <SliderInput label="F Concentration" value={f20p1FMgL} setter={setF20p1FMgL} min={100} max={3000} step={10} iconClass="fa-solid fa-vial" unit="mg/L" />
+                        <SliderInput label="pH Level" value={f20p1Ph} setter={setF20p1Ph} min={0} max={14} step={0.01} iconClass="fa-solid fa-flask-vial" unit="pH" />
+                        <SliderInput label="Flow Rate" value={f20p1Flow} setter={setF20p1Flow} min={100} max={3000} step={10} iconClass="fa-solid fa-droplet" unit="m³/d" />
+                      </div>
+
+                      {/* HFC Stream Settings */}
+                      <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
+                        <h2 className="text-sm font-bold text-gray-800 flex items-center gap-2 mb-3">
+                          <i className="fa-solid fa-flask text-purple-500"></i> HFC Stream
+                        </h2>
+                        <SliderInput label="F Concentration" value={hfcFWtPct} setter={setHfcFWtPct} min={0} max={30} step={0.1} iconClass="fa-solid fa-vial" unit="wt %" />
+                        <SliderInput label="Flow Rate" value={hfcFlow} setter={setHfcFlow} min={0} max={30} step={0.1} iconClass="fa-solid fa-droplet" unit="m³/d" />
+                        
+                        {!mixStreams && (
+                          <div className="mt-4 p-2.5 bg-orange-50 text-orange-800 rounded border border-orange-100 text-xs">
+                            <i className="fa-solid fa-circle-info mr-1"></i> Streams unmixed. Displaying raw F20P1 properties.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Bottom Row Inputs */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+                      {/* Reagent A Settings */}
+                      <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
+                        <h2 className="text-sm font-bold text-gray-800 flex items-center gap-2 mb-3">
+                          <i className="fa-solid fa-vial-circle-check text-indigo-500"></i> Reagent A Settings
+                        </h2>
+                        <p className="text-xs text-gray-500 mb-3">Set target pH to calculate required Reagent A dosage.</p>
+                        <SliderInput label="Target Mix pH" value={targetPh} setter={setTargetPh} min={8.0} max={9.0} step={0.01} iconClass="fa-solid fa-bullseye" unit="pH" />
+                      </div>
+
+                      {/* Adsorption Settings */}
+                      <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
+                        <h2 className="text-sm font-bold text-gray-800 flex items-center gap-2 mb-3">
+                          <i className="fa-solid fa-filter text-emerald-500"></i> Adsorption Downstream
+                        </h2>
+                        <SliderInput label="F after Crystallization" value={fAfterCryst} setter={setFAfterCryst} min={40} max={200} step={1} iconClass="fa-solid fa-cubes" unit="mg/L" />
+                        <SliderInput label="F after Adsorption" value={fAfterAdsorption} setter={setFAfterAdsorption} min={0} max={20} step={1} iconClass="fa-solid fa-check-double" unit="mg/L" />
+                        <SliderInput label="Al/F Dosing Ratio" value={alFRatioAdsorption} setter={setAlFRatioAdsorption} min={1} max={4} step={0.1} iconClass="fa-solid fa-scale-balanced" unit="mol" />
+                        <SliderInput label="Sludge Water Content" value={waterContent} setter={setWaterContent} min={10} max={90} step={1} iconClass="fa-solid fa-water" unit="%" />
+                      </div>
+                    </div>
+
+                  </div>
+
+                  {/* RIGHT: Results Panel (Spans 1 column) */}
+                  <div className="lg:col-span-1 space-y-4">
+                    
+                    {/* Final Mix Results */}
+                    <div className="bg-slate-800 rounded-xl p-4 shadow-md text-white border border-slate-700">
+                      <h2 className="text-sm font-bold text-blue-300 flex items-center gap-2 mb-3 pb-2 border-b border-slate-600">
+                        <i className="fa-solid fa-sliders"></i> Output Stream
+                      </h2>
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-end bg-slate-700/50 p-2.5 rounded-lg">
+                          <span className="text-xs text-slate-300 font-medium"><i className="fa-solid fa-flask-vial w-4"></i> Final pH</span>
+                          <span className="text-xl font-bold tabular-nums">{results.ph.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between items-end bg-slate-700/50 p-2.5 rounded-lg">
+                          <span className="text-xs text-slate-300 font-medium"><i className="fa-solid fa-vial w-4"></i> F Conc.</span>
+                          <div>
+                            <span className="text-xl font-bold tabular-nums text-teal-300">{results.fMgL.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
+                            <span className="text-[10px] text-teal-100/70 ml-1">mg/L</span>
+                          </div>
+                        </div>
+                        <div className="flex justify-between items-end bg-slate-700/50 p-2.5 rounded-lg">
+                          <span className="text-xs text-slate-300 font-medium"><i className="fa-solid fa-droplet w-4"></i> Flow Rate</span>
+                          <div>
+                            <span className="text-xl font-bold tabular-nums text-purple-300">{results.flow.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
+                            <span className="text-[10px] text-purple-100/70 ml-1">m³/d</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Reagent A Results */}
+                    <div className="bg-indigo-50 rounded-xl p-4 shadow-sm border border-indigo-100">
+                      <h2 className="text-sm font-bold text-indigo-900 flex items-center gap-2 mb-3 pb-2 border-b border-indigo-200">
+                        <i className="fa-solid fa-flask"></i> Reagent A Needs
+                      </h2>
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-end bg-white/60 p-2.5 rounded-lg border border-indigo-100/50">
+                          <span className="text-xs text-indigo-800 font-medium">Reagent Req.</span>
+                          <div>
+                            <span className="text-lg font-bold tabular-nums text-indigo-900">{treatmentResults.aChemicalKgPerDay.toLocaleString('en-US', { maximumFractionDigits: 1 })}</span>
+                            <span className="text-[10px] text-indigo-600 ml-1">kg/d</span>
+                          </div>
+                        </div>
+                        <div className="flex justify-between items-end bg-white/60 p-2.5 rounded-lg border border-indigo-100/50">
+                          <span className="text-xs text-indigo-800 font-medium">Equiv. Al(OH)₃</span>
+                          <div>
+                            <span className="text-lg font-bold tabular-nums text-indigo-900">{treatmentResults.alOh3EquivalentKgPerDay.toLocaleString('en-US', { maximumFractionDigits: 1 })}</span>
+                            <span className="text-[10px] text-indigo-600 ml-1">kg/d</span>
+                          </div>
+                        </div>
+                        <div className="flex justify-between items-end bg-white/60 p-2.5 rounded-lg border border-indigo-100/50">
+                          <span className="text-xs text-indigo-800 font-medium">Al/F Molar Ratio</span>
+                          <div>
+                            <span className="text-lg font-bold tabular-nums text-indigo-900">{treatmentResults.alFRatio.toFixed(2)}</span>
+                            <span className="text-[10px] text-indigo-600 ml-1">x/6</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Sludge Balance Results */}
+                    <div className="bg-emerald-50 rounded-xl p-4 shadow-sm border border-emerald-100">
+                      <div className="flex justify-between items-center mb-3 pb-2 border-b border-emerald-200">
+                        <h2 className="text-sm font-bold text-emerald-900 flex items-center gap-2">
+                          <i className="fa-solid fa-recycle"></i> Sludge Balance
+                        </h2>
+                        {sludgeResults.canTotallyReuse ? (
+                          <span className="bg-emerald-200 text-emerald-800 text-[10px] px-2 py-0.5 rounded-full font-bold">100% Reuse</span>
+                        ) : (
+                          <span className="bg-orange-200 text-orange-800 text-[10px] px-2 py-0.5 rounded-full font-bold">Discharge Req.</span>
+                        )}
+                      </div>
+                      
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-end bg-white/60 p-2.5 rounded-lg border border-emerald-100/50">
+                          <div className="flex flex-col">
+                            <span className="text-xs text-emerald-800 font-medium">Generated (Dry)</span>
+                            <span className="text-[9px] text-emerald-600">Al(OH)₃ + Adsorbed F</span>
+                          </div>
+                          <div>
+                            <span className="text-lg font-bold tabular-nums text-emerald-900">{sludgeResults.generatedDry.toLocaleString('en-US', { maximumFractionDigits: 1 })}</span>
+                            <span className="text-[10px] text-emerald-600 ml-1">kg/d</span>
+                          </div>
+                        </div>
+
+                        {!sludgeResults.canTotallyReuse ? (
+                          <>
+                            <div className="flex justify-between items-end bg-orange-50 p-2.5 rounded-lg border border-orange-100">
+                              <span className="text-xs text-orange-800 font-medium">Excess (Dry)</span>
+                              <div>
+                                <span className="text-lg font-bold tabular-nums text-orange-900">{sludgeResults.excessDry.toLocaleString('en-US', { maximumFractionDigits: 1 })}</span>
+                                <span className="text-[10px] text-orange-600 ml-1">kg/d</span>
+                              </div>
+                            </div>
+                            <div className="flex justify-between items-end bg-red-50 p-2.5 rounded-lg border border-red-200 shadow-sm">
+                              <div className="flex flex-col">
+                                <span className="text-xs text-red-800 font-bold">Wet Discharge</span>
+                                <span className="text-[9px] text-red-600">Includes {waterContent}% water</span>
+                              </div>
+                              <div>
+                                <span className="text-xl font-black tabular-nums text-red-700">{sludgeResults.wetExcess.toLocaleString('en-US', { maximumFractionDigits: 1 })}</span>
+                                <span className="text-[10px] text-red-600 ml-1">kg/d</span>
+                              </div>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="flex justify-between items-end bg-blue-50 p-2.5 rounded-lg border border-blue-100">
+                            <div className="flex flex-col">
+                              <span className="text-xs text-blue-800 font-medium">Shortfall (Dry)</span>
+                              <span className="text-[9px] text-blue-600">Needed for Reagent A</span>
+                            </div>
+                            <div>
+                              <span className="text-lg font-bold tabular-nums text-blue-900">{sludgeResults.shortfallAlOh3.toLocaleString('en-US', { maximumFractionDigits: 1 })}</span>
+                              <span className="text-[10px] text-blue-600 ml-1">kg/d</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
