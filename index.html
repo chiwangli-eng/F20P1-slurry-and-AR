@@ -1,546 +1,416 @@
-import React, { useState, useMemo } from 'react';
-import { Settings2, Beaker, Droplets, FlaskConical, TestTube2, Waves, Recycle, Trash2, Filter } from 'lucide-react';
-
-// MOVED OUTSIDE: Defining this outside the main App component prevents React from 
-// destroying and rebuilding the DOM nodes on every single frame while sliding!
-const SliderInput = ({ label, value, setter, min, max, step, icon: Icon, unit }) => (
-  <div className="mb-6 bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
-    <div className="flex justify-between items-center mb-2">
-      <label className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-        <Icon size={16} className="text-blue-500" />
-        {label}
-      </label>
-      <div className="flex items-center gap-1">
-        <input
-          type="number"
-          value={value}
-          onChange={(e) => setter(Number(e.target.value))}
-          className="w-24 px-2 py-1 text-right text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-          min={min}
-          max={max}
-          step={step}
-        />
-        <span className="text-xs text-gray-500 font-medium">{unit}</span>
-      </div>
-    </div>
-    <input
-      type="range"
-      min={min}
-      max={max}
-      step={step}
-      value={value}
-      onChange={(e) => setter(Number(e.target.value))}
-      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-    />
-    <div className="flex justify-between mt-1 px-1">
-      <span className="text-xs text-gray-400">{min}</span>
-      <span className="text-xs text-gray-400">{max}</span>
-    </div>
-  </div>
-);
-
-export default function App() {
-  // Application State
-  const [mixStreams, setMixStreams] = useState(true);
-
-  // F20P1 Wastewater State
-  const [f20p1FMgL, setF20p1FMgL] = useState(1200);
-  const [f20p1Ph, setF20p1Ph] = useState(3.52);
-  const [f20p1Flow, setF20p1Flow] = useState(2000);
-
-  // HFC Stream State
-  const [hfcFWtPct, setHfcFWtPct] = useState(10);
-  const [hfcFlow, setHfcFlow] = useState(10);
-
-  // Reagent A State
-  const [targetPh, setTargetPh] = useState(8.3);
-
-  // Adsorption Sludge State
-  const [fAfterCryst, setFAfterCryst] = useState(100);
-  const [alFRatioAdsorption, setAlFRatioAdsorption] = useState(2);
-
-  // Constants
-  const Ka = Math.pow(10, -3.19);
-  const MOLAR_MASS_F_MG = 19000; // mg/mol
-
-  // Calculations derived directly from the provided python logic
-  const results = useMemo(() => {
-    if (!mixStreams) {
-      return {
-        isMixed: false,
-        fMgL: f20p1FMgL,
-        ph: f20p1Ph,
-        flow: f20p1Flow
-      };
-    }
-
-    // Convert F concentration in F20P1 wastewater from mg/L to mol/L
-    const f_f20p1_mol_L = f20p1FMgL / MOLAR_MASS_F_MG;
-
-    // Convert F concentration in HFC stream from weight % to mol/L
-    const f_hfc_mg_L = (hfcFWtPct / 100) * 1000 * 1000;
-    const f_hfc_mol_L = f_hfc_mg_L / MOLAR_MASS_F_MG;
-
-    // Calculate total moles of F and total volume
-    const total_f_moles = (f_f20p1_mol_L * f20p1Flow) + (f_hfc_mol_L * hfcFlow);
-    const total_volume = f20p1Flow + hfcFlow;
-
-    // Mixed F concentration
-    const mixed_F_mol_L = total_f_moles / total_volume;
-    const mixed_F_mg_L = mixed_F_mol_L * MOLAR_MASS_F_MG;
-
-    // Charge difference function for F20P1
-    const calcChargeDiff = (ph, f_mg_l) => {
-      const h_plus = Math.pow(10, -ph);
-      const oh_minus = Math.pow(10, -(14 - ph));
-      const totf_mol_l = f_mg_l / MOLAR_MASS_F_MG;
-      const f_minus = (Ka * totf_mol_l) / (h_plus + Ka);
-      return oh_minus + f_minus - h_plus;
-    };
-
-    const charge_diff_F20P1 = calcChargeDiff(f20p1Ph, f20p1FMgL);
-    const adjusted_charge_diff = charge_diff_F20P1 * (f20p1Flow / total_volume);
-
-    // Root finding using Bisection Method (equivalent to fsolve for this monotonic function)
-    const objective = (ph_val) => {
-      const h_plus_val = Math.pow(10, -ph_val);
-      const oh_minus_val = Math.pow(10, -(14 - ph_val));
-      const f_minus_val = (Ka * mixed_F_mol_L) / (h_plus_val + Ka);
-      return h_plus_val + adjusted_charge_diff - oh_minus_val - f_minus_val;
-    };
-
-    let low = 0;
-    let high = 14;
-    let mixed_pH = 7;
-
-    // Reduced from 100 to 45 iterations. 45 iterations mathematically provides extremely 
-    // high precision (14 / 2^45 accuracy) but runs much faster during slider dragging.
-    for (let i = 0; i < 45; i++) {
-      mixed_pH = (low + high) / 2;
-      const val = objective(mixed_pH);
-      // As pH increases, objective strictly decreases.
-      if (val > 0) {
-        low = mixed_pH;
-      } else {
-        high = mixed_pH;
-      }
-    }
-
-    return {
-      isMixed: true,
-      fMgL: mixed_F_mg_L,
-      ph: mixed_pH,
-      flow: total_volume
-    };
-  }, [mixStreams, f20p1FMgL, f20p1Ph, f20p1Flow, hfcFWtPct, hfcFlow]);
-
-  // Treatment Calculations (Reagent A)
-  const treatmentResults = useMemo(() => {
-    const currentPh = results.ph;
-    const currentFMgL = results.fMgL;
-    const currentFlow = results.flow;
-
-    if (currentFMgL === 0) {
-      return { aChemicalKgPerDay: 0, alFRatio: 0 };
-    }
-
-    const Al_mol_per_kg_A = 2.51;
-
-    // 1. Convert F_concentration_mg_L to TOTF (mol/L)
-    const TOTF_mol_L = currentFMgL / 19000;
-
-    // 2. Calculate F_treated (kg/L)
-    const F_treated_kg_per_L = currentFMgL / 1000000;
-
-    // 3. Calculate 10^-pH
-    const ten_neg_pH = Math.pow(10, -currentPh);
-    const ten_neg_pHtar = Math.pow(10, -targetPh);
-
-    // 4. Calculate F (mol/L)
-    const F_mol_L = (Ka / (Ka + ten_neg_pH)) * TOTF_mol_L;
-
-    // 5. Calculate HF (mol/L)
-    const HF_mol_L = TOTF_mol_L - F_mol_L;
-
-    // 6. Calculate Alkali (mol/L)
-    const Alkali_mol_L = (ten_neg_pH - ten_neg_pHtar) + 
-                         (Math.pow(10, targetPh - 14) - Math.pow(10, currentPh - 14)) + 
-                         HF_mol_L;
-
-    // 7. Calculate Al (mol/L)
-    const Al_mol_L = Alkali_mol_L / 6;
-
-    // 8. Calculate Al_F for A
-    const Al_F_for_A = (Al_mol_L / TOTF_mol_L) * 6;
-
-    // 9. Calculate A chemical needed per kg of F treated
-    const A_chemical_kg_per_kgF = (TOTF_mol_L / 6) * Al_F_for_A / Al_mol_per_kg_A / F_treated_kg_per_L;
-
-    // Calculate daily requirements (kg/day)
-    // Flow is in m3/d. F conc is mg/L = g/m3.
-    // Total F kg/day = (mg/L * m3/d) / 1000
-    const F_kg_per_day = (currentFMgL * currentFlow) / 1000;
-    const A_chemical_kg_per_day = A_chemical_kg_per_kgF * F_kg_per_day;
-
-    // Calculate equivalent Al(OH)3 needed
-    const total_Al_moles_per_day = A_chemical_kg_per_day * Al_mol_per_kg_A;
-    const MOLAR_MASS_AL_OH_3_KG = 0.07801; // 78.01 g/mol converted to kg/mol
-    const alOh3EquivalentKgPerDay = total_Al_moles_per_day * MOLAR_MASS_AL_OH_3_KG;
-
-    return {
-      aChemicalKgPerDay: Math.max(0, A_chemical_kg_per_day), // Prevent negative values
-      alFRatio: Math.max(0, Al_F_for_A),
-      alOh3EquivalentKgPerDay: Math.max(0, alOh3EquivalentKgPerDay)
-    };
-  }, [results, targetPh, Ka]);
-
-  // Sludge Balance Calculations
-  const sludgeResults = useMemo(() => {
-    const currentFlow = results.flow; // m³/d
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wastewater Mixing Calculator</title>
     
-    // Moles of F per day = (mg/L / 19000 mg/mol) * m³/d * 1000 L/m³
-    const fMolesPerDay = (fAfterCryst / 19000) * currentFlow * 1000;
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
     
-    // Moles of Al dosed per day based on selected Al/F ratio
-    const alMolesPerDay = fMolesPerDay * alFRatioAdsorption;
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
-    // Al(OH)3 generated in kg/day (Molar mass = 0.07801 kg/mol)
-    const alOh3GeneratedKgPerDay = alMolesPerDay * 0.07801;
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
     
-    // Needed for Reagent A
-    const alOh3Needed = treatmentResults.alOh3EquivalentKgPerDay;
+    <!-- Babel to compile JSX in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-50 text-gray-800 font-sans">
     
-    let canTotallyReuse = true;
-    let excess = 0;
-    let shortfall = 0;
+    <!-- This is where the React app will be injected -->
+    <div id="root"></div>
 
-    if (alOh3GeneratedKgPerDay > alOh3Needed) {
-      canTotallyReuse = false; // We have more than we can use
-      excess = alOh3GeneratedKgPerDay - alOh3Needed;
-    } else {
-      canTotallyReuse = true; // We can use 100% of it
-      shortfall = alOh3Needed - alOh3GeneratedKgPerDay;
-    }
+    <!-- React Application Logic -->
+    <script type="text/babel">
+        const { useState, useMemo } = React;
 
-    return {
-      generated: alOh3GeneratedKgPerDay,
-      excess: excess,
-      shortfall: shortfall,
-      canTotallyReuse: canTotallyReuse
-    };
-  }, [results.flow, fAfterCryst, alFRatioAdsorption, treatmentResults.alOh3EquivalentKgPerDay]);
-
-  return (
-    <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans text-gray-800">
-      <div className="max-w-5xl mx-auto space-y-6">
-        
-        {/* Header */}
-        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-3">
-              <Waves className="text-blue-600" />
-              Wastewater Mixing Calculator
-            </h1>
-            <p className="text-gray-500 text-sm mt-1">
-              Calculate final pH and Fluoride (F) concentration after mixing F20P1 and HFC streams.
-            </p>
+        const SliderInput = ({ label, value, setter, min, max, step, iconClass, unit }) => (
+          <div className="mb-6 bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
+            <div className="flex justify-between items-center mb-2">
+              <label className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                <i className={`${iconClass} text-blue-500 w-4 text-center`}></i>
+                {label}
+              </label>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  value={value}
+                  onChange={(e) => setter(Number(e.target.value))}
+                  className="w-24 px-2 py-1 text-right text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  min={min}
+                  max={max}
+                  step={step}
+                />
+                <span className="text-xs text-gray-500 font-medium">{unit}</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min={min}
+              max={max}
+              step={step}
+              value={value}
+              onChange={(e) => setter(Number(e.target.value))}
+              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+            />
+            <div className="flex justify-between mt-1 px-1">
+              <span className="text-xs text-gray-400">{min}</span>
+              <span className="text-xs text-gray-400">{max}</span>
+            </div>
           </div>
-          
-          {/* Mix Toggle Button */}
-          <div className="flex items-center gap-3 bg-gray-50 p-2 rounded-lg border border-gray-200">
-            <span className={`text-sm font-medium ${!mixStreams ? 'text-gray-800' : 'text-gray-400'}`}>Raw Streams</span>
-            <button 
-              onClick={() => setMixStreams(!mixStreams)}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${mixStreams ? 'bg-blue-600' : 'bg-gray-300'}`}
-            >
-              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${mixStreams ? 'translate-x-6' : 'translate-x-1'}`} />
-            </button>
-            <span className={`text-sm font-medium ${mixStreams ? 'text-blue-700' : 'text-gray-400'}`}>Mix Streams</span>
-          </div>
-        </div>
+        );
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          
-          {/* F20P1 Settings */}
-          <div className="lg:col-span-1 space-y-2">
-            <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2 mb-4">
-              <Beaker size={20} className="text-teal-500" />
-              F20P1 Wastewater
-            </h2>
-            <SliderInput
-              label="F Concentration"
-              value={f20p1FMgL}
-              setter={setF20p1FMgL}
-              min={100}
-              max={3000}
-              step={10}
-              icon={TestTube2}
-              unit="mg/L"
-            />
-            <SliderInput
-              label="pH Level"
-              value={f20p1Ph}
-              setter={setF20p1Ph}
-              min={0}
-              max={14}
-              step={0.01}
-              icon={FlaskConical}
-              unit="pH"
-            />
-            <SliderInput
-              label="Flow Rate"
-              value={f20p1Flow}
-              setter={setF20p1Flow}
-              min={100}
-              max={3000}
-              step={10}
-              icon={Droplets}
-              unit="m³/d"
-            />
-          </div>
+        function App() {
+          const [mixStreams, setMixStreams] = useState(true);
 
-          {/* HFC Stream Settings */}
-          <div className="lg:col-span-1 space-y-2">
-            <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2 mb-4">
-              <Beaker size={20} className="text-purple-500" />
-              HFC Stream
-            </h2>
-            <SliderInput
-              label="F Concentration"
-              value={hfcFWtPct}
-              setter={setHfcFWtPct}
-              min={0}
-              max={30}
-              step={0.1}
-              icon={TestTube2}
-              unit="wt %"
-            />
-            <SliderInput
-              label="Flow Rate"
-              value={hfcFlow}
-              setter={setHfcFlow}
-              min={0}
-              max={30}
-              step={0.1}
-              icon={Droplets}
-              unit="m³/d"
-            />
+          // F20P1 Wastewater State
+          const [f20p1FMgL, setF20p1FMgL] = useState(1200);
+          const [f20p1Ph, setF20p1Ph] = useState(3.52);
+          const [f20p1Flow, setF20p1Flow] = useState(2000);
+
+          // HFC Stream State
+          const [hfcFWtPct, setHfcFWtPct] = useState(10);
+          const [hfcFlow, setHfcFlow] = useState(10);
+
+          // Reagent A State
+          const [targetPh, setTargetPh] = useState(8.3);
+
+          // Adsorption Sludge State
+          const [fAfterCryst, setFAfterCryst] = useState(100);
+          const [alFRatioAdsorption, setAlFRatioAdsorption] = useState(2);
+
+          // Constants
+          const Ka = Math.pow(10, -3.19);
+          const MOLAR_MASS_F_MG = 19000;
+
+          const results = useMemo(() => {
+            if (!mixStreams) {
+              return { isMixed: false, fMgL: f20p1FMgL, ph: f20p1Ph, flow: f20p1Flow };
+            }
+
+            const f_f20p1_mol_L = f20p1FMgL / MOLAR_MASS_F_MG;
+            const f_hfc_mg_L = (hfcFWtPct / 100) * 1000 * 1000;
+            const f_hfc_mol_L = f_hfc_mg_L / MOLAR_MASS_F_MG;
+
+            const total_f_moles = (f_f20p1_mol_L * f20p1Flow) + (f_hfc_mol_L * hfcFlow);
+            const total_volume = f20p1Flow + hfcFlow;
+
+            const mixed_F_mol_L = total_f_moles / total_volume;
+            const mixed_F_mg_L = mixed_F_mol_L * MOLAR_MASS_F_MG;
+
+            const calcChargeDiff = (ph, f_mg_l) => {
+              const h_plus = Math.pow(10, -ph);
+              const oh_minus = Math.pow(10, -(14 - ph));
+              const totf_mol_l = f_mg_l / MOLAR_MASS_F_MG;
+              const f_minus = (Ka * totf_mol_l) / (h_plus + Ka);
+              return oh_minus + f_minus - h_plus;
+            };
+
+            const charge_diff_F20P1 = calcChargeDiff(f20p1Ph, f20p1FMgL);
+            const adjusted_charge_diff = charge_diff_F20P1 * (f20p1Flow / total_volume);
+
+            const objective = (ph_val) => {
+              const h_plus_val = Math.pow(10, -ph_val);
+              const oh_minus_val = Math.pow(10, -(14 - ph_val));
+              const f_minus_val = (Ka * mixed_F_mol_L) / (h_plus_val + Ka);
+              return h_plus_val + adjusted_charge_diff - oh_minus_val - f_minus_val;
+            };
+
+            let low = 0;
+            let high = 14;
+            let mixed_pH = 7;
+
+            for (let i = 0; i < 45; i++) {
+              mixed_pH = (low + high) / 2;
+              const val = objective(mixed_pH);
+              if (val > 0) { low = mixed_pH; } 
+              else { high = mixed_pH; }
+            }
+
+            return { isMixed: true, fMgL: mixed_F_mg_L, ph: mixed_pH, flow: total_volume };
+          }, [mixStreams, f20p1FMgL, f20p1Ph, f20p1Flow, hfcFWtPct, hfcFlow]);
+
+          const treatmentResults = useMemo(() => {
+            const currentPh = results.ph;
+            const currentFMgL = results.fMgL;
+            const currentFlow = results.flow;
+
+            if (currentFMgL === 0) return { aChemicalKgPerDay: 0, alFRatio: 0, alOh3EquivalentKgPerDay: 0 };
+
+            const Al_mol_per_kg_A = 2.51;
+            const TOTF_mol_L = currentFMgL / 19000;
+            const F_treated_kg_per_L = currentFMgL / 1000000;
+            const ten_neg_pH = Math.pow(10, -currentPh);
+            const ten_neg_pHtar = Math.pow(10, -targetPh);
+            const F_mol_L = (Ka / (Ka + ten_neg_pH)) * TOTF_mol_L;
+            const HF_mol_L = TOTF_mol_L - F_mol_L;
+
+            const Alkali_mol_L = (ten_neg_pH - ten_neg_pHtar) + 
+                                 (Math.pow(10, targetPh - 14) - Math.pow(10, currentPh - 14)) + 
+                                 HF_mol_L;
+
+            const Al_mol_L = Alkali_mol_L / 6;
+            const Al_F_for_A = (Al_mol_L / TOTF_mol_L) * 6;
+            const A_chemical_kg_per_kgF = (TOTF_mol_L / 6) * Al_F_for_A / Al_mol_per_kg_A / F_treated_kg_per_L;
+
+            const F_kg_per_day = (currentFMgL * currentFlow) / 1000;
+            const A_chemical_kg_per_day = A_chemical_kg_per_kgF * F_kg_per_day;
+
+            const total_Al_moles_per_day = A_chemical_kg_per_day * Al_mol_per_kg_A;
+            const MOLAR_MASS_AL_OH_3_KG = 0.07801;
+            const alOh3EquivalentKgPerDay = total_Al_moles_per_day * MOLAR_MASS_AL_OH_3_KG;
+
+            return {
+              aChemicalKgPerDay: Math.max(0, A_chemical_kg_per_day),
+              alFRatio: Math.max(0, Al_F_for_A),
+              alOh3EquivalentKgPerDay: Math.max(0, alOh3EquivalentKgPerDay)
+            };
+          }, [results, targetPh, Ka]);
+
+          const sludgeResults = useMemo(() => {
+            const currentFlow = results.flow;
+            const fMolesPerDay = (fAfterCryst / 19000) * currentFlow * 1000;
+            const alMolesPerDay = fMolesPerDay * alFRatioAdsorption;
+            const alOh3GeneratedKgPerDay = alMolesPerDay * 0.07801;
+            const alOh3Needed = treatmentResults.alOh3EquivalentKgPerDay;
             
-            {!mixStreams && (
-              <div className="mt-8 p-4 bg-orange-50 text-orange-800 rounded-xl border border-orange-100 text-sm">
-                <strong>Note:</strong> Streams are currently set to "Raw". The output panel below is only displaying properties for the raw F20P1 stream.
-              </div>
-            )}
-          </div>
+            let canTotallyReuse = true;
+            let excess = 0;
+            let shortfall = 0;
 
-          {/* Results Panel */}
-          <div className="lg:col-span-1">
-            <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-6 shadow-xl text-white h-full flex flex-col">
-              <div className="flex items-center gap-3 mb-6">
-                <Settings2 className="text-blue-400" />
-                <h2 className="text-xl font-bold">Output Stream</h2>
-              </div>
-              
-              <div className="space-y-6 flex-grow">
-                {/* Result Block: pH */}
-                <div className="bg-white/10 p-4 rounded-xl backdrop-blur-sm border border-white/5">
-                  <p className="text-blue-200 text-sm font-medium mb-1 flex items-center gap-2">
-                    <FlaskConical size={14} /> Final pH
-                  </p>
-                  <p className="text-4xl font-light tabular-nums tracking-tight">
-                    {results.ph.toFixed(2)}
-                  </p>
-                </div>
+            if (alOh3GeneratedKgPerDay > alOh3Needed) {
+              canTotallyReuse = false;
+              excess = alOh3GeneratedKgPerDay - alOh3Needed;
+            } else {
+              canTotallyReuse = true;
+              shortfall = alOh3Needed - alOh3GeneratedKgPerDay;
+            }
 
-                {/* Result Block: F Concentration */}
-                <div className="bg-white/10 p-4 rounded-xl backdrop-blur-sm border border-white/5">
-                  <p className="text-teal-200 text-sm font-medium mb-1 flex items-center gap-2">
-                    <TestTube2 size={14} /> F Concentration
-                  </p>
-                  <div className="flex items-baseline gap-2">
-                    <p className="text-4xl font-light tabular-nums tracking-tight">
-                      {results.fMgL.toLocaleString('en-US', { maximumFractionDigits: 1 })}
+            return { generated: alOh3GeneratedKgPerDay, excess, shortfall, canTotallyReuse };
+          }, [results.flow, fAfterCryst, alFRatioAdsorption, treatmentResults.alOh3EquivalentKgPerDay]);
+
+          return (
+            <div className="p-4 md:p-8">
+              <div className="max-w-5xl mx-auto space-y-6">
+                
+                {/* Header */}
+                <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                  <div>
+                    <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-3">
+                      <i className="fa-solid fa-water text-blue-600"></i>
+                      Wastewater Mixing Calculator
+                    </h1>
+                    <p className="text-gray-500 text-sm mt-1">
+                      Calculate final pH and Fluoride (F) concentration after mixing F20P1 and HFC streams.
                     </p>
-                    <span className="text-teal-100/70 text-sm font-medium">mg/L</span>
+                  </div>
+                  
+                  <div className="flex items-center gap-3 bg-gray-50 p-2 rounded-lg border border-gray-200">
+                    <span className={`text-sm font-medium ${!mixStreams ? 'text-gray-800' : 'text-gray-400'}`}>Raw Streams</span>
+                    <button 
+                      onClick={() => setMixStreams(!mixStreams)}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${mixStreams ? 'bg-blue-600' : 'bg-gray-300'}`}
+                    >
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${mixStreams ? 'translate-x-6' : 'translate-x-1'}`}></span>
+                    </button>
+                    <span className={`text-sm font-medium ${mixStreams ? 'text-blue-700' : 'text-gray-400'}`}>Mix Streams</span>
                   </div>
                 </div>
 
-                {/* Result Block: Total Flow */}
-                <div className="bg-white/10 p-4 rounded-xl backdrop-blur-sm border border-white/5">
-                  <p className="text-purple-200 text-sm font-medium mb-1 flex items-center gap-2">
-                    <Droplets size={14} /> Total Flow Rate
-                  </p>
-                  <div className="flex items-baseline gap-2">
-                    <p className="text-4xl font-light tabular-nums tracking-tight">
-                      {results.flow.toLocaleString('en-US', { maximumFractionDigits: 1 })}
-                    </p>
-                    <span className="text-purple-100/70 text-sm font-medium">m³/d</span>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  
+                  {/* F20P1 Settings */}
+                  <div className="lg:col-span-1 space-y-2">
+                    <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2 mb-4">
+                      <i className="fa-solid fa-flask text-teal-500"></i>
+                      F20P1 Wastewater
+                    </h2>
+                    <SliderInput label="F Concentration" value={f20p1FMgL} setter={setF20p1FMgL} min={100} max={3000} step={10} iconClass="fa-solid fa-vial" unit="mg/L" />
+                    <SliderInput label="pH Level" value={f20p1Ph} setter={setF20p1Ph} min={0} max={14} step={0.01} iconClass="fa-solid fa-flask-vial" unit="pH" />
+                    <SliderInput label="Flow Rate" value={f20p1Flow} setter={setF20p1Flow} min={100} max={3000} step={10} iconClass="fa-solid fa-droplet" unit="m³/d" />
+                  </div>
+
+                  {/* HFC Stream Settings */}
+                  <div className="lg:col-span-1 space-y-2">
+                    <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2 mb-4">
+                      <i className="fa-solid fa-flask text-purple-500"></i>
+                      HFC Stream
+                    </h2>
+                    <SliderInput label="F Concentration" value={hfcFWtPct} setter={setHfcFWtPct} min={0} max={30} step={0.1} iconClass="fa-solid fa-vial" unit="wt %" />
+                    <SliderInput label="Flow Rate" value={hfcFlow} setter={setHfcFlow} min={0} max={30} step={0.1} iconClass="fa-solid fa-droplet" unit="m³/d" />
+                    
+                    {!mixStreams && (
+                      <div className="mt-8 p-4 bg-orange-50 text-orange-800 rounded-xl border border-orange-100 text-sm">
+                        <strong>Note:</strong> Streams are currently set to "Raw". The output panel below is only displaying properties for the raw F20P1 stream.
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Results Panel */}
+                  <div className="lg:col-span-1">
+                    <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-6 shadow-xl text-white h-full flex flex-col">
+                      <div className="flex items-center gap-3 mb-6">
+                        <i className="fa-solid fa-sliders text-blue-400"></i>
+                        <h2 className="text-xl font-bold">Output Stream</h2>
+                      </div>
+                      
+                      <div className="space-y-6 flex-grow">
+                        <div className="bg-white/10 p-4 rounded-xl backdrop-blur-sm border border-white/5">
+                          <p className="text-blue-200 text-sm font-medium mb-1 flex items-center gap-2">
+                            <i className="fa-solid fa-flask-vial"></i> Final pH
+                          </p>
+                          <p className="text-4xl font-light tabular-nums tracking-tight">{results.ph.toFixed(2)}</p>
+                        </div>
+
+                        <div className="bg-white/10 p-4 rounded-xl backdrop-blur-sm border border-white/5">
+                          <p className="text-teal-200 text-sm font-medium mb-1 flex items-center gap-2">
+                            <i className="fa-solid fa-vial"></i> F Concentration
+                          </p>
+                          <div className="flex items-baseline gap-2">
+                            <p className="text-4xl font-light tabular-nums tracking-tight">{results.fMgL.toLocaleString('en-US', { maximumFractionDigits: 1 })}</p>
+                            <span className="text-teal-100/70 text-sm font-medium">mg/L</span>
+                          </div>
+                        </div>
+
+                        <div className="bg-white/10 p-4 rounded-xl backdrop-blur-sm border border-white/5">
+                          <p className="text-purple-200 text-sm font-medium mb-1 flex items-center gap-2">
+                            <i className="fa-solid fa-droplet"></i> Total Flow Rate
+                          </p>
+                          <div className="flex items-baseline gap-2">
+                            <p className="text-4xl font-light tabular-nums tracking-tight">{results.flow.toLocaleString('en-US', { maximumFractionDigits: 1 })}</p>
+                            <span className="text-purple-100/70 text-sm font-medium">m³/d</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-6 pt-4 border-t border-white/10">
+                        <p className="text-xs text-slate-400 text-center flex items-center justify-center gap-1.5">
+                          <span className={`w-2 h-2 rounded-full ${mixStreams ? 'bg-green-400' : 'bg-orange-400'}`}></span>
+                          Status: {mixStreams ? "Streams Mixed" : "Raw F20P1 Only"}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  
+                </div>
+
+                {/* Secondary Treatment Section */}
+                <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 mt-6">
+                  <h2 className="text-xl font-bold text-gray-900 flex items-center gap-3 mb-6">
+                    <i className="fa-solid fa-flask text-indigo-600"></i>
+                    Reagent A Treatment
+                  </h2>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
+                    <div>
+                      <p className="text-sm text-gray-500 mb-6">Adjust the target pH to calculate the required dosage of Reagent A and the resulting Al/F molar ratio for the stream.</p>
+                      <SliderInput label="Target pH" value={targetPh} setter={setTargetPh} min={8.0} max={9.0} step={0.01} iconClass="fa-solid fa-flask-vial" unit="pH" />
+                    </div>
+
+                    <div className="bg-indigo-50 rounded-xl p-6 border border-indigo-100 flex flex-col gap-4">
+                      <div>
+                        <p className="text-indigo-800 text-sm font-semibold mb-1">Reagent A Required</p>
+                        <div className="flex items-baseline gap-2">
+                          <p className="text-4xl font-bold text-indigo-900 tracking-tight">{treatmentResults.aChemicalKgPerDay.toLocaleString('en-US', { maximumFractionDigits: 1 })}</p>
+                          <span className="text-indigo-700 font-medium">kg/day</span>
+                        </div>
+                      </div>
+                      
+                      <div className="h-px bg-indigo-200 w-full my-2"></div>
+
+                      <div>
+                        <p className="text-indigo-800 text-sm font-semibold mb-1">Al/F Molar Ratio (for A)</p>
+                        <div className="flex items-baseline gap-2">
+                          <p className="text-4xl font-bold text-indigo-900 tracking-tight">{treatmentResults.alFRatio.toFixed(3)}</p>
+                          <span className="text-indigo-700 font-medium">x/6</span>
+                        </div>
+                      </div>
+
+                      <div className="h-px bg-indigo-200 w-full my-2"></div>
+
+                      <div>
+                        <p className="text-indigo-800 text-sm font-semibold mb-1">Equivalent Al(OH)₃</p>
+                        <div className="flex items-baseline gap-2">
+                          <p className="text-4xl font-bold text-indigo-900 tracking-tight">{treatmentResults.alOh3EquivalentKgPerDay.toLocaleString('en-US', { maximumFractionDigits: 1 })}</p>
+                          <span className="text-indigo-700 font-medium">kg/day</span>
+                        </div>
+                        <p className="text-xs text-indigo-600 mt-1">Derived from waste solids</p>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <div className="mt-6 pt-4 border-t border-white/10">
-            <p className="text-xs text-slate-400 text-center flex items-center justify-center gap-1.5">
-              <span className={`w-2 h-2 rounded-full ${mixStreams ? 'bg-green-400' : 'bg-orange-400'}`}></span>
-              Status: {mixStreams ? "Streams Mixed" : "Raw F20P1 Only"}
-            </p>
-          </div>
-        </div>
-      </div>
-      
-    </div>
+                {/* Sludge Balance Section */}
+                <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 mt-6">
+                  <h2 className="text-xl font-bold text-gray-900 flex items-center gap-3 mb-6">
+                    <i className="fa-solid fa-recycle text-emerald-600"></i>
+                    Adsorption & Sludge Balance
+                  </h2>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
+                    <div>
+                      <p className="text-sm text-gray-500 mb-6">Set downstream adsorption parameters to calculate Al(OH)₃ sludge generation and reusability for Reagent A preparation.</p>
+                      <SliderInput label="F after Crystallization" value={fAfterCryst} setter={setFAfterCryst} min={40} max={200} step={1} iconClass="fa-solid fa-filter" unit="mg/L" />
+                      <SliderInput label="Al/F Dosing Ratio" value={alFRatioAdsorption} setter={setAlFRatioAdsorption} min={1} max={4} step={0.1} iconClass="fa-solid fa-flask" unit="mol/mol" />
+                    </div>
 
-    {/* Secondary Treatment Section */}
-    <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 mt-6">
-      <h2 className="text-xl font-bold text-gray-900 flex items-center gap-3 mb-6">
-        <Beaker className="text-indigo-600" />
-        Reagent A Treatment
-      </h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
-        {/* Treatment Input */}
-        <div>
-          <p className="text-sm text-gray-500 mb-6">Adjust the target pH to calculate the required dosage of Reagent A and the resulting Al/F molar ratio for the stream.</p>
-          <SliderInput
-            label="Target pH"
-            value={targetPh}
-            setter={setTargetPh}
-            min={8.0}
-            max={9.0}
-            step={0.01}
-            icon={FlaskConical}
-            unit="pH"
-          />
-        </div>
+                    <div className="bg-emerald-50 rounded-xl p-6 border border-emerald-100 flex flex-col gap-4">
+                      <div>
+                        <p className="text-emerald-800 text-sm font-semibold mb-1">Generated Adsorption Sludge</p>
+                        <div className="flex items-baseline gap-2">
+                          <p className="text-4xl font-bold text-emerald-900 tracking-tight">{sludgeResults.generated.toLocaleString('en-US', { maximumFractionDigits: 1 })}</p>
+                          <span className="text-emerald-700 font-medium">kg/day</span>
+                        </div>
+                        <p className="text-xs text-emerald-600 mt-1">Total Al(OH)₃ from downstream process</p>
+                      </div>
+                      
+                      <div className="h-px bg-emerald-200 w-full my-2"></div>
 
-        {/* Treatment Output */}
-        <div className="bg-indigo-50 rounded-xl p-6 border border-indigo-100 flex flex-col gap-4">
-          <div>
-            <p className="text-indigo-800 text-sm font-semibold mb-1">Reagent A Required</p>
-            <div className="flex items-baseline gap-2">
-              <p className="text-4xl font-bold text-indigo-900 tracking-tight">
-                {treatmentResults.aChemicalKgPerDay.toLocaleString('en-US', { maximumFractionDigits: 1 })}
-              </p>
-              <span className="text-indigo-700 font-medium">kg/day</span>
-            </div>
-          </div>
-          
-          <div className="h-px bg-indigo-200 w-full my-2"></div>
+                      <div>
+                        <p className="text-emerald-800 text-sm font-semibold mb-2">Reuse Status</p>
+                        {sludgeResults.canTotallyReuse ? (
+                          <div className="bg-emerald-100 text-emerald-800 p-3 rounded-lg text-sm font-medium flex items-center gap-2">
+                            <i className="fa-solid fa-recycle text-emerald-700"></i>
+                            100% of sludge can be reused!
+                          </div>
+                        ) : (
+                          <div className="bg-orange-100 text-orange-800 p-3 rounded-lg text-sm font-medium flex items-center gap-2">
+                            <i className="fa-solid fa-trash-can text-orange-700"></i>
+                            Excess sludge must be discharged.
+                          </div>
+                        )}
+                      </div>
 
-          <div>
-            <p className="text-indigo-800 text-sm font-semibold mb-1">Al/F Molar Ratio (for A)</p>
-            <div className="flex items-baseline gap-2">
-              <p className="text-4xl font-bold text-indigo-900 tracking-tight">
-                {treatmentResults.alFRatio.toFixed(3)}
-              </p>
-              <span className="text-indigo-700 font-medium">x/6</span>
-            </div>
-          </div>
+                      {!sludgeResults.canTotallyReuse ? (
+                        <div>
+                          <p className="text-orange-800 text-sm font-semibold mb-1">Excess to Discharge</p>
+                          <div className="flex items-baseline gap-2">
+                            <p className="text-3xl font-bold text-orange-900 tracking-tight">{sludgeResults.excess.toLocaleString('en-US', { maximumFractionDigits: 1 })}</p>
+                            <span className="text-orange-700 font-medium">kg/day</span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <p className="text-blue-800 text-sm font-semibold mb-1">Additional Al(OH)₃ Needed</p>
+                          <div className="flex items-baseline gap-2">
+                            <p className="text-3xl font-bold text-blue-900 tracking-tight">{sludgeResults.shortfall.toLocaleString('en-US', { maximumFractionDigits: 1 })}</p>
+                            <span className="text-blue-700 font-medium">kg/day</span>
+                          </div>
+                          <p className="text-xs text-blue-600 mt-1">To fully meet Reagent A demand</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
 
-          <div className="h-px bg-indigo-200 w-full my-2"></div>
-
-          <div>
-            <p className="text-indigo-800 text-sm font-semibold mb-1">Equivalent Al(OH)₃</p>
-            <div className="flex items-baseline gap-2">
-              <p className="text-4xl font-bold text-indigo-900 tracking-tight">
-                {treatmentResults.alOh3EquivalentKgPerDay.toLocaleString('en-US', { maximumFractionDigits: 1 })}
-              </p>
-              <span className="text-indigo-700 font-medium">kg/day</span>
-            </div>
-            <p className="text-xs text-indigo-600 mt-1">Derived from waste solids</p>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    {/* Sludge Balance Section */}
-    <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 mt-6">
-      <h2 className="text-xl font-bold text-gray-900 flex items-center gap-3 mb-6">
-        <Recycle className="text-emerald-600" />
-        Adsorption & Sludge Balance
-      </h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
-        {/* Adsorption Inputs */}
-        <div>
-          <p className="text-sm text-gray-500 mb-6">Set downstream adsorption parameters to calculate Al(OH)₃ sludge generation and reusability for Reagent A preparation.</p>
-          <SliderInput
-            label="F after Crystallization"
-            value={fAfterCryst}
-            setter={setFAfterCryst}
-            min={40}
-            max={200}
-            step={1}
-            icon={Filter}
-            unit="mg/L"
-          />
-          <SliderInput
-            label="Al/F Dosing Ratio"
-            value={alFRatioAdsorption}
-            setter={setAlFRatioAdsorption}
-            min={1}
-            max={4}
-            step={0.1}
-            icon={Beaker}
-            unit="mol/mol"
-          />
-        </div>
-
-        {/* Sludge Output */}
-        <div className="bg-emerald-50 rounded-xl p-6 border border-emerald-100 flex flex-col gap-4">
-          <div>
-            <p className="text-emerald-800 text-sm font-semibold mb-1">Generated Adsorption Sludge</p>
-            <div className="flex items-baseline gap-2">
-              <p className="text-4xl font-bold text-emerald-900 tracking-tight">
-                {sludgeResults.generated.toLocaleString('en-US', { maximumFractionDigits: 1 })}
-              </p>
-              <span className="text-emerald-700 font-medium">kg/day</span>
-            </div>
-            <p className="text-xs text-emerald-600 mt-1">Total Al(OH)₃ from downstream process</p>
-          </div>
-          
-          <div className="h-px bg-emerald-200 w-full my-2"></div>
-
-          <div>
-            <p className="text-emerald-800 text-sm font-semibold mb-2">Reuse Status</p>
-            {sludgeResults.canTotallyReuse ? (
-              <div className="bg-emerald-100 text-emerald-800 p-3 rounded-lg text-sm font-medium flex items-center gap-2">
-                <Recycle size={18} />
-                100% of sludge can be reused!
-              </div>
-            ) : (
-              <div className="bg-orange-100 text-orange-800 p-3 rounded-lg text-sm font-medium flex items-center gap-2">
-                <Trash2 size={18} />
-                Excess sludge must be discharged.
-              </div>
-            )}
-          </div>
-
-          {!sludgeResults.canTotallyReuse ? (
-            <div>
-              <p className="text-orange-800 text-sm font-semibold mb-1">Excess to Discharge</p>
-              <div className="flex items-baseline gap-2">
-                <p className="text-3xl font-bold text-orange-900 tracking-tight">
-                  {sludgeResults.excess.toLocaleString('en-US', { maximumFractionDigits: 1 })}
-                </p>
-                <span className="text-orange-700 font-medium">kg/day</span>
               </div>
             </div>
-          ) : (
-            <div>
-              <p className="text-blue-800 text-sm font-semibold mb-1">Additional Al(OH)₃ Needed</p>
-              <div className="flex items-baseline gap-2">
-                <p className="text-3xl font-bold text-blue-900 tracking-tight">
-                  {sludgeResults.shortfall.toLocaleString('en-US', { maximumFractionDigits: 1 })}
-                </p>
-                <span className="text-blue-700 font-medium">kg/day</span>
-              </div>
-              <p className="text-xs text-blue-600 mt-1">To fully meet Reagent A demand</p>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
+          );
+        }
 
-  </div>
-</div>
-  );
-}
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
