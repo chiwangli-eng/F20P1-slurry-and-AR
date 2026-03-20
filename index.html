@@ -262,7 +262,7 @@
                     </div>
                     <div>
                       <h1 className="text-2xl font-black bg-gradient-to-r from-blue-700 to-indigo-700 bg-clip-text text-transparent leading-tight">Wastewater Dashboard</h1>
-                      <p className="text-gray-500 font-medium text-xs mt-0.5">Stream Mixing, pH Targeting & Adsorption Modeling</p>
+                      <p className="text-gray-500 font-medium text-xs mt-0.5">Stream Mixing, Adsorption Modeling & Sludge disposal after AR</p>
                     </div>
                   </div>
                 </div>
@@ -462,7 +462,7 @@
                         {!sludgeResults.canTotallyReuse ? (
                           <>
                             <div className="flex justify-between items-end bg-orange-50/80 p-3 rounded-xl border border-orange-200 shadow-sm">
-                              <span className="text-xs text-orange-900 font-bold">Excess (Dry)</span>
+                              <span className="text-xs text-orange-900 font-bold">Excess (Dry) after AR prepared</span>
                               <div>
                                 <span className="text-xl font-black tabular-nums text-orange-900">{sludgeResults.excessDry.toLocaleString('en-US', { maximumFractionDigits: 1 })}</span>
                                 <span className="text-[10px] font-bold text-orange-600 ml-1">kg/d</span>
