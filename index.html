@@ -68,7 +68,7 @@
         function App() {
           const [mixStreams, setMixStreams] = useState(true);
 
-          // F20P1 Wastewater State
+          // HFD Wastewater State
           const [f20p1FMgL, setF20p1FMgL] = useState(1200);
           const [f20p1Ph, setF20p1Ph] = useState(3.52);
           const [f20p1Flow, setF20p1Flow] = useState(2000);
@@ -275,7 +275,7 @@
                     
                     {/* LEFT Column: Raw Streams */}
                     <div className="space-y-6">
-                      {/* F20P1 Settings */}
+                      {/* HFD Settings */}
                       <div className="bg-white rounded-2xl p-5 shadow-sm hover:shadow-xl transition-shadow duration-300 border-t-4 border-t-teal-400 border-x border-b border-gray-100 relative overflow-hidden">
                         <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none text-teal-500"><i className="fa-solid fa-flask text-6xl"></i></div>
                         <h2 className="text-sm font-black text-gray-800 flex items-center gap-2 mb-4 uppercase tracking-wider">
@@ -393,13 +393,19 @@
                             <span className="text-[10px] font-bold text-purple-200/50 ml-1">m³/d</span>
                           </div>
                         </div>
-                        {/* Sulfate Output with extra pop */}
-                        <div className="flex justify-between items-end bg-gradient-to-r from-yellow-500/10 to-amber-500/20 hover:from-yellow-500/20 hover:to-amber-500/30 transition-colors p-3.5 rounded-xl border border-yellow-500/30 shadow-[inset_0_1px_15px_rgba(234,179,8,0.1)]">
-                          <span className="text-xs text-yellow-300 font-black tracking-wide"><i className="fa-solid fa-vial-circle-check w-4 opacity-80"></i> Final Sulfate</span>
-                          <div>
-                            <span className="text-3xl font-black tabular-nums text-yellow-400 drop-shadow-md">{sulfateResults.finalSulfateMgL.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
-                            <span className="text-[10px] font-bold text-yellow-200/50 ml-1">mg/L</span>
-                          </div>
+                      </div>
+                    </div>
+
+                    {/* Treated Water Quality (Sulfate) */}
+                    <div className="bg-gradient-to-br from-yellow-50 to-amber-50 rounded-2xl p-5 shadow-md border border-yellow-200 hover:shadow-lg transition-shadow">
+                      <h2 className="text-sm font-black text-amber-900 flex items-center gap-2 mb-4 pb-3 border-b border-yellow-200/60 uppercase tracking-wider">
+                        <span className="bg-yellow-200/50 text-amber-700 p-1 rounded"><i className="fa-solid fa-flask"></i></span> Treated Water Quality
+                      </h2>
+                      <div className="flex justify-between items-end bg-white/80 p-3.5 rounded-xl border border-yellow-300 shadow-sm">
+                        <span className="text-xs text-amber-900 font-black tracking-wide">Final Sulfate (SO₄²⁻)</span>
+                        <div>
+                          <span className="text-3xl font-black tabular-nums text-amber-600 drop-shadow-sm">{sulfateResults.finalSulfateMgL.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
+                          <span className="text-[10px] font-bold text-amber-600/70 ml-1">mg/L</span>
                         </div>
                       </div>
                     </div>
